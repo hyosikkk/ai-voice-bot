@@ -112,23 +112,9 @@ export default async function Home() {
           <p className="mt-4 text-slate-400 text-base sm:text-lg max-w-2xl mx-auto leading-relaxed">
             오디오 또는 비디오 파일을 업로드하면{" "}
             <span className="text-violet-400 font-semibold">ElevenLabs</span>와{" "}
-            <span className="text-amber-400 font-semibold">Claude AI</span>가
+            <span className="text-amber-400 font-semibold">Claude AI</span>가<br />
             자동으로 원하는 언어로 더빙합니다
           </p>
-        </div>
-
-        {/* 기술 스택 배지 */}
-        <div className="flex flex-wrap justify-center gap-2">
-          {TECH_BADGES.map((b) => (
-            <span
-              key={b.label}
-              className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border ${b.color}`}
-            >
-              <span className="font-semibold">{b.label}</span>
-              <span className="opacity-60">·</span>
-              <span className="opacity-70">{b.desc}</span>
-            </span>
-          ))}
         </div>
       </section>
 
