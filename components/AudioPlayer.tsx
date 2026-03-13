@@ -18,6 +18,302 @@ const LANGUAGE_LABELS: Record<string, string> = {
   es: "Español",
 };
 
+// ─── 비디오 패널 (원본 or 더빙) ──────────────────────────────────
+function VideoPanel({
+  label,
+  badge,
+  badgeColor,
+  videoUrl,
+  audioUrl,
+  muted,
+  syncVideoRef,
+  syncAudioRef,
+}: {
+  label: string;
+  badge: string;
+  badgeColor: string;
+  videoUrl: string;
+  audioUrl?: string;
+  muted: boolean;
+  syncVideoRef?: React.RefObject<HTMLVideoElement | null>;
+  syncAudioRef?: React.RefObject<HTMLAudioElement | null>;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isHovering, setIsHovering] = useState(false);
+
+  // sync refs를 외부로 노출
+  useEffect(() => {
+    if (syncVideoRef) (syncVideoRef as React.MutableRefObject<HTMLVideoElement | null>).current = videoRef.current;
+    if (syncAudioRef) (syncAudioRef as React.MutableRefObject<HTMLAudioElement | null>).current = audioRef.current;
+  });
+
+  useEffect(() => {
+    const el = audioUrl ? audioRef.current : videoRef.current;
+    if (!el) return;
+    const onMeta = () => setDuration(el.duration);
+    const onTime = () => setCurrentTime(el.currentTime);
+    const onEnded = () => { setIsPlaying(false); setCurrentTime(0); };
+    el.addEventListener("loadedmetadata", onMeta);
+    el.addEventListener("timeupdate", onTime);
+    el.addEventListener("ended", onEnded);
+    return () => {
+      el.removeEventListener("loadedmetadata", onMeta);
+      el.removeEventListener("timeupdate", onTime);
+      el.removeEventListener("ended", onEnded);
+    };
+  }, [audioUrl]);
+
+  const togglePlay = () => {
+    const video = videoRef.current;
+    const audio = audioUrl ? audioRef.current : null;
+    if (!video) return;
+    if (isPlaying) {
+      video.pause();
+      audio?.pause();
+      setIsPlaying(false);
+    } else {
+      video.play();
+      audio?.play();
+      setIsPlaying(true);
+    }
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const t = parseFloat(e.target.value);
+    if (videoRef.current) videoRef.current.currentTime = t;
+    if (audioUrl && audioRef.current) audioRef.current.currentTime = t;
+    setCurrentTime(t);
+  };
+
+  const fmt = (s: number) => {
+    if (!isFinite(s) || isNaN(s)) return "0:00";
+    return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  };
+
+  return (
+    <div className="flex flex-col rounded-xl overflow-hidden border border-white/10 bg-black/40">
+      {/* 라벨 헤더 */}
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-white/[0.03] border-b border-white/[0.06]">
+        <span className={`text-xs font-semibold ${badgeColor}`}>{label}</span>
+        <span className="text-[10px] text-slate-600 font-mono bg-white/5 px-1.5 py-0.5 rounded border border-white/5">
+          {badge}
+        </span>
+      </div>
+
+      {/* 비디오 화면 */}
+      <div
+        className="relative bg-black aspect-video cursor-pointer"
+        onMouseEnter={() => setIsHovering(true)}
+        onMouseLeave={() => setIsHovering(false)}
+        onClick={togglePlay}
+      >
+        <video
+          ref={videoRef}
+          src={videoUrl}
+          muted={muted}
+          className="w-full h-full object-contain"
+          playsInline
+        />
+        {audioUrl && <audio ref={audioRef} src={audioUrl} />}
+
+        {/* 재생 오버레이 */}
+        <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${
+          !isPlaying || isHovering ? "opacity-100" : "opacity-0"
+        }`}>
+          <div className={`w-14 h-14 rounded-full flex items-center justify-center backdrop-blur-sm border transition-all duration-200 ${
+            isPlaying
+              ? "bg-black/30 border-white/20 opacity-70"
+              : "bg-black/50 border-white/30"
+          }`}>
+            {isPlaying ? (
+              <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 컨트롤 바 */}
+      <div className="px-4 pt-3 pb-4 space-y-2 bg-[#0a0a1a]">
+        <input
+          type="range"
+          min={0}
+          max={duration || 1}
+          step={0.01}
+          value={currentTime}
+          onChange={handleSeek}
+          className="w-full h-1 rounded-full appearance-none cursor-pointer"
+          style={{
+            background: `linear-gradient(to right, #7c3aed ${(currentTime / (duration || 1)) * 100}%, rgba(255,255,255,0.1) 0%)`,
+          }}
+        />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={togglePlay}
+              className="w-8 h-8 rounded-full bg-violet-600 hover:bg-violet-500 flex items-center justify-center transition-colors"
+            >
+              {isPlaying ? (
+                <svg className="w-3.5 h-3.5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              )}
+            </button>
+            <span className="text-xs font-mono text-slate-500">
+              {fmt(currentTime)} / {fmt(duration)}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 더빙 비디오 다운로드 버튼 ────────────────────────────────────
+function MergeDownloadButton({
+  originalVideoUrl,
+  audioUrl,
+  fileName,
+}: {
+  originalVideoUrl: string;
+  audioUrl: string;
+  fileName: string;
+}) {
+  const [status, setStatus] = useState<"idle" | "loading" | "merging" | "done" | "error">("idle");
+  const [progress, setProgress] = useState(0);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const handleDownload = async () => {
+    setStatus("loading");
+    setProgress(0);
+    try {
+      const { FFmpeg } = await import("@ffmpeg/ffmpeg");
+      const { fetchFile, toBlobURL } = await import("@ffmpeg/util");
+
+      const ffmpeg = new FFmpeg();
+      ffmpeg.on("progress", ({ progress: p }) => {
+        setProgress(Math.round(p * 100));
+      });
+
+      setStatus("loading");
+      const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+      });
+
+      setStatus("merging");
+      await ffmpeg.writeFile("video.mp4", await fetchFile(originalVideoUrl));
+      await ffmpeg.writeFile("audio.mp3", await fetchFile(audioUrl));
+      await ffmpeg.exec([
+        "-i", "video.mp4",
+        "-i", "audio.mp3",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-shortest",
+        "output.mp4",
+      ]);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data: any = await ffmpeg.readFile("output.mp4");
+      const buf: ArrayBuffer = (data as Uint8Array).buffer.slice(0) as ArrayBuffer;
+      const blob = new Blob([buf], { type: "video/mp4" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "dubbed_" + fileName.replace(/\.[^.]+$/, ".mp4");
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatus("done");
+    } catch (e) {
+      setErrorMsg((e as Error).message);
+      setStatus("error");
+    }
+  };
+
+  if (status === "idle") {
+    return (
+      <button
+        onClick={handleDownload}
+        className="inline-flex items-center gap-2 text-xs font-medium px-4 py-2 rounded-lg bg-violet-600/20 hover:bg-violet-600/30 text-violet-300 border border-violet-500/25 transition-all"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        </svg>
+        더빙 비디오 다운로드 (.mp4)
+      </button>
+    );
+  }
+
+  if (status === "loading") {
+    return (
+      <div className="inline-flex items-center gap-2 text-xs text-slate-400 px-4 py-2">
+        <svg className="w-3.5 h-3.5 animate-spin text-violet-400" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        WASM 엔진 로딩 중... (최초 1회, ~30MB)
+      </div>
+    );
+  }
+
+  if (status === "merging") {
+    return (
+      <div className="flex items-center gap-3 text-xs text-slate-400 px-1">
+        <svg className="w-3.5 h-3.5 animate-spin text-violet-400 flex-shrink-0" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        <div className="flex-1">
+          <div className="flex justify-between mb-1">
+            <span>비디오 + 음성 합치는 중...</span>
+            <span className="text-violet-400 font-mono">{progress}%</span>
+          </div>
+          <div className="w-full bg-white/5 rounded-full h-1">
+            <div
+              className="h-1 rounded-full bg-gradient-to-r from-violet-500 to-cyan-500 transition-all"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "done") {
+    return (
+      <span className="inline-flex items-center gap-2 text-xs text-emerald-400 px-4 py-2">
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+        </svg>
+        다운로드 완료
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-2 text-xs text-red-400 px-4 py-2">
+      오류: {errorMsg.slice(0, 40)}
+    </span>
+  );
+}
+
+// ─── 메인 컴포넌트 ────────────────────────────────────────────────
 export default function AudioPlayer({
   audioUrl,
   fileName,
@@ -26,156 +322,63 @@ export default function AudioPlayer({
   targetLanguage,
   originalVideoUrl,
 }: AudioPlayerProps) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-
-  // 오디오 duration 로드
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const onLoaded = () => setDuration(audio.duration);
-    audio.addEventListener("loadedmetadata", onLoaded);
-    return () => audio.removeEventListener("loadedmetadata", onLoaded);
-  }, [audioUrl]);
-
-  // 시간 업데이트
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const onTimeUpdate = () => setCurrentTime(audio.currentTime);
-    const onEnded = () => { setIsPlaying(false); setCurrentTime(0); };
-    audio.addEventListener("timeupdate", onTimeUpdate);
-    audio.addEventListener("ended", onEnded);
-    return () => {
-      audio.removeEventListener("timeupdate", onTimeUpdate);
-      audio.removeEventListener("ended", onEnded);
-    };
-  }, []);
-
-  const togglePlay = () => {
-    const audio = audioRef.current;
-    const video = videoRef.current;
-    if (!audio) return;
-
-    if (isPlaying) {
-      audio.pause();
-      video?.pause();
-      setIsPlaying(false);
-    } else {
-      audio.play();
-      video?.play();
-      setIsPlaying(true);
-    }
-  };
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const time = parseFloat(e.target.value);
-    if (audioRef.current) audioRef.current.currentTime = time;
-    if (videoRef.current) videoRef.current.currentTime = time;
-    setCurrentTime(time);
-  };
-
-  const formatTime = (s: number) => {
-    if (!isFinite(s)) return "0:00";
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return `${m}:${sec.toString().padStart(2, "0")}`;
-  };
+  const isVideo = !!originalVideoUrl;
 
   return (
     <div className="space-y-4">
-      {/* ===== 비디오 플레이어 (비디오 파일인 경우) ===== */}
-      {originalVideoUrl ? (
-        <div className="glass rounded-xl overflow-hidden border border-emerald-500/20 bg-emerald-500/5">
-          {/* 비디오 화면 */}
-          <div className="relative bg-black rounded-t-xl">
-            <video
-              ref={videoRef}
-              src={originalVideoUrl}
-              muted
-              className="w-full max-h-[360px] object-contain"
-              playsInline
-            />
-            {/* 재생 오버레이 */}
-            {!isPlaying && (
-              <button
-                onClick={togglePlay}
-                className="absolute inset-0 flex items-center justify-center bg-black/30 hover:bg-black/20 transition-colors"
-              >
-                <div className="w-16 h-16 rounded-full bg-white/20 backdrop-blur flex items-center justify-center border border-white/30">
-                  <svg className="w-7 h-7 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M8 5v14l11-7z" />
-                  </svg>
-                </div>
-              </button>
-            )}
+      {isVideo ? (
+        /* ===== 비디오 모드: 좌우 패널 ===== */
+        <div className="space-y-3">
+          {/* 완료 헤더 */}
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 rounded-full bg-emerald-500/25 flex items-center justify-center">
+              <svg className="w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <span className="text-sm font-semibold text-emerald-300">더빙 완료</span>
           </div>
 
-          {/* 커스텀 컨트롤 */}
-          <div className="p-4 space-y-3">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="w-5 h-5 rounded-full bg-emerald-500/25 flex items-center justify-center">
-                <svg className="w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-              <span className="text-xs font-semibold text-emerald-300">더빙 완료 — 비디오 + 더빙 음성</span>
-            </div>
-
-            {/* 시크바 */}
-            <input
-              type="range"
-              min={0}
-              max={duration || 0}
-              step={0.01}
-              value={currentTime}
-              onChange={handleSeek}
-              className="w-full h-1 accent-violet-500 cursor-pointer"
+          {/* 좌우 비디오 패널 */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <VideoPanel
+              label="원본 영상"
+              badge="Original"
+              badgeColor="text-slate-300"
+              videoUrl={originalVideoUrl}
+              muted={false}
             />
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                {/* 재생/정지 버튼 */}
-                <button
-                  onClick={togglePlay}
-                  className="w-9 h-9 rounded-full bg-violet-600 hover:bg-violet-500 flex items-center justify-center transition-colors"
-                >
-                  {isPlaying ? (
-                    <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-                    </svg>
-                  ) : (
-                    <svg className="w-4 h-4 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
-                  )}
-                </button>
-                <span className="text-xs text-slate-400 font-mono">
-                  {formatTime(currentTime)} / {formatTime(duration)}
-                </span>
-              </div>
-
-              {/* 다운로드 (음성만) */}
-              <a
-                href={audioUrl}
-                download={fileName}
-                className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                음성 다운로드
-              </a>
-            </div>
+            <VideoPanel
+              label="더빙 영상"
+              badge={LANGUAGE_LABELS[targetLanguage] || targetLanguage}
+              badgeColor="text-violet-300"
+              videoUrl={originalVideoUrl}
+              audioUrl={audioUrl}
+              muted={true}
+            />
           </div>
 
-          {/* 숨김 오디오 */}
-          <audio ref={audioRef} src={audioUrl} />
+          {/* 다운로드 버튼들 */}
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <MergeDownloadButton
+              originalVideoUrl={originalVideoUrl}
+              audioUrl={audioUrl}
+              fileName={fileName}
+            />
+            <a
+              href={audioUrl}
+              download={fileName}
+              className="inline-flex items-center gap-2 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              음성만 다운로드 (.mp3)
+            </a>
+          </div>
         </div>
       ) : (
-        /* ===== 오디오 전용 플레이어 ===== */
+        /* ===== 오디오 전용 모드 ===== */
         <div className="glass rounded-xl p-5 border border-emerald-500/20 bg-emerald-500/5">
           <div className="flex items-center gap-2 mb-4">
             <div className="w-6 h-6 rounded-full bg-emerald-500/25 flex items-center justify-center">
@@ -185,9 +388,7 @@ export default function AudioPlayer({
             </div>
             <h3 className="text-sm font-semibold text-emerald-300">더빙 결과</h3>
           </div>
-          <audio controls className="w-full h-10" src={audioUrl} style={{ accentColor: "#7c3aed" }}>
-            브라우저가 오디오 재생을 지원하지 않습니다.
-          </audio>
+          <audio controls className="w-full h-10" src={audioUrl} style={{ accentColor: "#7c3aed" }} />
           <a
             href={audioUrl}
             download={fileName}
@@ -201,7 +402,7 @@ export default function AudioPlayer({
         </div>
       )}
 
-      {/* 원본 텍스트 (STT 결과) */}
+      {/* 원본 텍스트 */}
       <div className="glass rounded-xl p-4 border border-white/[0.06]">
         <div className="flex items-center gap-2 mb-3">
           <span className="text-xs font-mono text-slate-500 uppercase tracking-wider">원본 텍스트</span>
