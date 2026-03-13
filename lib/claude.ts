@@ -1,42 +1,32 @@
-import Anthropic from "@anthropic-ai/sdk";
+// Google Cloud Translation API v2 (Basic)
+// Free tier: 500,000 characters/month
+// API 키: https://console.cloud.google.com/apis/library/translate.googleapis.com
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
-
-// 언어 코드를 사람이 읽기 쉬운 이름으로 변환
-const LANGUAGE_NAMES: Record<string, string> = {
-  ko: "한국어",
-  en: "영어(English)",
-  ja: "일본어(日本語)",
-  es: "스페인어(Español)",
-};
-
-// 텍스트를 목표 언어로 번역
 export async function translateText(
   text: string,
   targetLanguage: string
 ): Promise<string> {
-  const targetName = LANGUAGE_NAMES[targetLanguage] || targetLanguage;
+  const apiKey = process.env.GOOGLE_TRANSLATE_API_KEY;
+  if (!apiKey) throw new Error("GOOGLE_TRANSLATE_API_KEY가 설정되지 않았습니다");
 
-  const message = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 4096,
-    messages: [
-      {
-        role: "user",
-        content: `다음 텍스트를 ${targetName}로 번역해주세요. 더빙용 번역이므로 자연스럽고 구어체로 번역해주세요. 번역문만 출력하고 설명이나 다른 텍스트는 포함하지 마세요.
+  const response = await fetch(
+    `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        q: text,
+        target: targetLanguage,
+        format: "text",
+      }),
+    }
+  );
 
-번역할 텍스트:
-${text}`,
-      },
-    ],
-  });
-
-  const content = message.content[0];
-  if (content.type !== "text") {
-    throw new Error("Claude API에서 예상치 못한 응답 형식");
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Google Translate 오류 (${response.status}): ${errorText}`);
   }
 
-  return content.text.trim();
+  const data = await response.json();
+  return data.data.translations[0].translatedText as string;
 }

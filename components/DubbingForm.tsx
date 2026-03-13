@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { upload } from "@vercel/blob/client";
 import AudioPlayer from "./AudioPlayer";
 import { SUPPORTED_LANGUAGES } from "@/lib/elevenlabs";
 
@@ -64,31 +63,29 @@ export default function DubbingForm() {
     setResult(null);
 
     try {
-      // 1단계: Vercel Blob에 파일 업로드 (클라이언트 사이드 직접 업로드)
-      // 이 방식으로 Vercel의 4.5MB 요청 크기 제한을 우회
+      // 업로드 + 더빙 파이프라인 (파일을 서버에 직접 전송)
       setStep("uploading");
       setUploadProgress(0);
 
-      const blob = await upload(file.name, file, {
-        access: "public",
-        handleUploadUrl: "/api/upload",
-        onUploadProgress: ({ percentage }) => {
-          setUploadProgress(Math.round(percentage));
-        },
-      });
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("fileName", file.name);
+      formData.append("targetLanguage", targetLanguage);
 
-      // 2~4단계: 더빙 파이프라인 API 호출
-      setStep("transcribing");
-
-      const response = await fetch("/api/dub", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileUrl: blob.url,
-          fileName: file.name,
-          mimeType: file.type,
-          targetLanguage,
-        }),
+      const response = await new Promise<Response>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            setUploadProgress(Math.round((e.loaded / e.total) * 100));
+          }
+        };
+        xhr.onload = () => {
+          setStep("transcribing");
+          resolve(new Response(xhr.responseText, { status: xhr.status }));
+        };
+        xhr.onerror = () => reject(new Error("네트워크 오류가 발생했습니다"));
+        xhr.open("POST", "/api/dub");
+        xhr.send(formData);
       });
 
       if (!response.ok) {
