@@ -45,6 +45,7 @@ export default function DubbingForm() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [result, setResult] = useState<DubResult | null>(null);
   const [error, setError] = useState<string>("");
+  const [originalVideoUrl, setOriginalVideoUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -53,6 +54,14 @@ export default function DubbingForm() {
     if (selected.size > 100 * 1024 * 1024) {
       setError("파일 크기가 100MB를 초과합니다. 더 작은 파일을 사용해주세요.");
       return;
+    }
+    // 기존 오브젝트 URL 해제
+    if (originalVideoUrl) URL.revokeObjectURL(originalVideoUrl);
+
+    if (selected.type.startsWith("video/")) {
+      setOriginalVideoUrl(URL.createObjectURL(selected));
+    } else {
+      setOriginalVideoUrl(null);
     }
     setFile(selected);
     setResult(null);
@@ -118,6 +127,8 @@ export default function DubbingForm() {
     setError("");
     setStep("idle");
     setUploadProgress(0);
+    if (originalVideoUrl) URL.revokeObjectURL(originalVideoUrl);
+    setOriginalVideoUrl(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -344,6 +355,7 @@ export default function DubbingForm() {
             transcription={result.transcription}
             translatedText={result.translatedText}
             targetLanguage={targetLanguage}
+            originalVideoUrl={originalVideoUrl ?? undefined}
           />
         </div>
       )}
