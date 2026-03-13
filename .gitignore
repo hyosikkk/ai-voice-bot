@@ -1,0 +1,34 @@
+# 의존성
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# 테스트
+/coverage
+
+# Next.js 빌드 결과물
+/.next/
+/out/
+
+# 프로덕션 빌드
+/build
+
+# 환경 변수 (절대 커밋하지 말 것)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 디버그 로그
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Vercel
+.vercel
+
+# TypeScript 빌드 정보
+*.tsbuildinfo
+next-env.d.ts
