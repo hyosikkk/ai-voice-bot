@@ -52,18 +52,50 @@ function VideoPanel({
   });
 
   useEffect(() => {
-    const el = audioUrl ? audioRef.current : videoRef.current;
-    if (!el) return;
-    const onMeta = () => setDuration(el.duration);
-    const onTime = () => setCurrentTime(el.currentTime);
+    const video = videoRef.current;
+    const audio = audioRef.current;
+    const timeEl = audioUrl ? audio : video;
+    if (!timeEl) return;
+
+    const onTime = () => setCurrentTime(timeEl.currentTime);
     const onEnded = () => { setIsPlaying(false); setCurrentTime(0); };
-    el.addEventListener("loadedmetadata", onMeta);
-    el.addEventListener("timeupdate", onTime);
-    el.addEventListener("ended", onEnded);
+    timeEl.addEventListener("timeupdate", onTime);
+    timeEl.addEventListener("ended", onEnded);
+
+    // 더빙 패널: 비디오와 오디오 둘 다 로드되면 playbackRate 자동 조정
+    if (audioUrl && video && audio) {
+      let videoReady = false;
+      let audioReady = false;
+
+      const trySync = () => {
+        if (!videoReady || !audioReady) return;
+        setDuration(video.duration);
+        if (audio.duration > 0 && video.duration > 0) {
+          const rate = Math.min(Math.max(audio.duration / video.duration, 0.5), 4.0);
+          // 더빙 음성의 재생 속도를 조정해 영상 길이에 맞춤
+          audio.playbackRate = rate;
+        }
+      };
+
+      const onVideoMeta = () => { videoReady = true; trySync(); };
+      const onAudioMeta = () => { audioReady = true; trySync(); };
+      video.addEventListener("loadedmetadata", onVideoMeta);
+      audio.addEventListener("loadedmetadata", onAudioMeta);
+      return () => {
+        timeEl.removeEventListener("timeupdate", onTime);
+        timeEl.removeEventListener("ended", onEnded);
+        video.removeEventListener("loadedmetadata", onVideoMeta);
+        audio.removeEventListener("loadedmetadata", onAudioMeta);
+      };
+    }
+
+    // 원본 패널
+    const onMeta = () => setDuration(timeEl.duration);
+    timeEl.addEventListener("loadedmetadata", onMeta);
     return () => {
-      el.removeEventListener("loadedmetadata", onMeta);
-      el.removeEventListener("timeupdate", onTime);
-      el.removeEventListener("ended", onEnded);
+      timeEl.removeEventListener("loadedmetadata", onMeta);
+      timeEl.removeEventListener("timeupdate", onTime);
+      timeEl.removeEventListener("ended", onEnded);
     };
   }, [audioUrl]);
 
