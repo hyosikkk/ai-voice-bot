@@ -77,7 +77,7 @@ npm run dev
 
 ## 배포된 서비스 URL
 
-**https://ai-voice-bot-rho.vercel.app**
+**https://ai-voice-bot-rose.vercel.app**
 
 > Google 계정으로 로그인 후 화이트리스트에 등록된 사용자만 이용 가능합니다.
 
