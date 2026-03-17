@@ -283,7 +283,7 @@ export default function DubbingForm() {
           )}
         </div>
 
-        {/* ===== 1분 크롭 UI ===== */}
+        {/* ===== 구간 크롭 UI ===== */}
         {showCropUI && !isProcessing && (
           <div className="glass rounded-xl border border-cyan-500/20 bg-cyan-500/5 overflow-hidden">
             {/* 헤더 */}
@@ -293,76 +293,90 @@ export default function DubbingForm() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
                 <span className="text-sm font-semibold text-cyan-300">구간 크롭</span>
-                <span className="text-xs text-slate-500">전체 길이: {fmtTime(videoDuration)}</span>
+                <span className="text-xs text-slate-500">전체: {fmtTime(videoDuration)}</span>
               </div>
               <button
                 type="button"
                 onClick={() => setShowCropUI(false)}
-                className="text-xs text-slate-600 hover:text-slate-400 transition-colors"
+                className="text-sm text-slate-500 hover:text-slate-300 transition-colors px-2 py-1 touch-manipulation"
               >
                 건너뛰기
               </button>
             </div>
 
-            <div className="p-4 space-y-4">
-              {/* 미리보기 + 슬라이더 */}
+            <div className="p-4 space-y-5">
+              {/* 미리보기 */}
               {originalVideoUrl && (
                 <video
                   src={originalVideoUrl}
-                  className="w-full rounded-lg max-h-40 object-contain bg-black/30"
+                  className="w-full rounded-lg max-h-48 object-contain bg-black/30"
                   controls
                   playsInline
                 />
               )}
 
-              {/* 시간 범위 표시 */}
-              <div className="flex items-center justify-center gap-3 text-sm font-mono">
-                <span className="text-cyan-400 font-semibold">{fmtTime(cropStart)}</span>
-                <span className="text-slate-500">→</span>
-                <span className="text-cyan-400 font-semibold">{fmtTime(cropEnd)}</span>
-                <span className="text-xs text-slate-600 font-sans">({fmtTime(Math.max(0, cropEnd - cropStart))})</span>
+              {/* 선택 구간 표시 */}
+              <div className="flex items-center justify-center gap-3 py-2 rounded-lg bg-white/5">
+                <div className="text-center">
+                  <p className="text-xs text-slate-500 mb-0.5">시작</p>
+                  <p className="text-lg font-mono font-bold text-cyan-400">{fmtTime(cropStart)}</p>
+                </div>
+                <span className="text-slate-600 text-lg">→</span>
+                <div className="text-center">
+                  <p className="text-xs text-slate-500 mb-0.5">종료</p>
+                  <p className="text-lg font-mono font-bold text-cyan-400">{fmtTime(cropEnd)}</p>
+                </div>
+                <div className="w-px h-8 bg-white/10" />
+                <div className="text-center">
+                  <p className="text-xs text-slate-500 mb-0.5">구간</p>
+                  <p className="text-lg font-mono font-bold text-violet-400">{fmtTime(Math.max(0, cropEnd - cropStart))}</p>
+                </div>
               </div>
 
               {/* 시작 슬라이더 */}
-              <div className="space-y-1">
-                <div className="flex justify-between">
-                  <label className="text-xs text-slate-500">시작</label>
-                  <span className="text-xs font-mono text-cyan-400">{fmtTime(cropStart)}</span>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <label className="text-sm font-medium text-slate-400">시작 지점</label>
+                  <span className="text-sm font-mono text-cyan-400">{fmtTime(cropStart)}</span>
                 </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={Math.max(0, cropEnd - 1)}
-                  step={1}
-                  value={cropStart}
-                  onChange={(e) => setCropStart(Number(e.target.value))}
-                  disabled={isCropping}
-                  className="w-full h-1.5 rounded-full appearance-none cursor-pointer disabled:opacity-50"
-                  style={{
-                    background: `linear-gradient(to right, #06b6d4 ${(cropStart / Math.max(1, videoDuration)) * 100}%, rgba(255,255,255,0.1) 0%)`,
-                  }}
-                />
+                <div className="py-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, cropEnd - 1)}
+                    step={1}
+                    value={cropStart}
+                    onChange={(e) => setCropStart(Number(e.target.value))}
+                    disabled={isCropping}
+                    className="w-full h-2 rounded-full appearance-none cursor-pointer disabled:opacity-50 touch-manipulation"
+                    style={{
+                      background: `linear-gradient(to right, #06b6d4 ${(cropStart / Math.max(1, videoDuration)) * 100}%, rgba(255,255,255,0.1) 0%)`,
+                    }}
+                  />
+                </div>
               </div>
 
               {/* 종료 슬라이더 */}
-              <div className="space-y-1">
-                <div className="flex justify-between">
-                  <label className="text-xs text-slate-500">종료</label>
-                  <span className="text-xs font-mono text-cyan-400">{fmtTime(cropEnd)}</span>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <label className="text-sm font-medium text-slate-400">종료 지점</label>
+                  <span className="text-sm font-mono text-cyan-400">{fmtTime(cropEnd)}</span>
                 </div>
-                <input
-                  type="range"
-                  min={Math.min(cropStart + 1, videoDuration)}
-                  max={videoDuration}
-                  step={1}
-                  value={cropEnd}
-                  onChange={(e) => setCropEnd(Number(e.target.value))}
-                  disabled={isCropping}
-                  className="w-full h-1.5 rounded-full appearance-none cursor-pointer disabled:opacity-50"
-                  style={{
-                    background: `linear-gradient(to right, rgba(255,255,255,0.1) ${(cropStart / Math.max(1, videoDuration)) * 100}%, #06b6d4 ${(cropStart / Math.max(1, videoDuration)) * 100}%, #06b6d4 ${(cropEnd / Math.max(1, videoDuration)) * 100}%, rgba(255,255,255,0.1) 0%)`,
-                  }}
-                />
+                <div className="py-2">
+                  <input
+                    type="range"
+                    min={Math.min(cropStart + 1, videoDuration)}
+                    max={videoDuration}
+                    step={1}
+                    value={cropEnd}
+                    onChange={(e) => setCropEnd(Number(e.target.value))}
+                    disabled={isCropping}
+                    className="w-full h-2 rounded-full appearance-none cursor-pointer disabled:opacity-50 touch-manipulation"
+                    style={{
+                      background: `linear-gradient(to right, rgba(255,255,255,0.1) ${(cropStart / Math.max(1, videoDuration)) * 100}%, #06b6d4 ${(cropStart / Math.max(1, videoDuration)) * 100}%, #06b6d4 ${(cropEnd / Math.max(1, videoDuration)) * 100}%, rgba(255,255,255,0.1) 0%)`,
+                    }}
+                  />
+                </div>
                 <div className="flex justify-between text-xs text-slate-600">
                   <span>{fmtTime(0)}</span>
                   <span>{fmtTime(videoDuration)}</span>
@@ -372,22 +386,22 @@ export default function DubbingForm() {
               {/* 크롭 진행 표시 */}
               {isCropping && (
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span className="flex items-center gap-1.5">
-                      <svg className="w-3 h-3 animate-spin text-cyan-400" fill="none" viewBox="0 0 24 24">
+                  <div className="flex items-center justify-between text-sm text-slate-400">
+                    <span className="flex items-center gap-2">
+                      <svg className="w-4 h-4 animate-spin text-cyan-400" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                       </svg>
-                      {cropStatus === "loading" ? "WASM 엔진 로딩 중..." : "크롭 처리 중..."}
+                      {cropStatus === "loading" ? "WASM 엔진 로딩 중... (~30MB)" : "크롭 처리 중..."}
                     </span>
                     {cropStatus === "cropping" && (
-                      <span className="text-cyan-400 font-mono">{cropProgress}%</span>
+                      <span className="text-cyan-400 font-mono font-bold">{cropProgress}%</span>
                     )}
                   </div>
                   {cropStatus === "cropping" && (
-                    <div className="w-full bg-white/5 rounded-full h-1">
+                    <div className="w-full bg-white/5 rounded-full h-2">
                       <div
-                        className="h-1 rounded-full bg-gradient-to-r from-cyan-500 to-violet-500 transition-all duration-200"
+                        className="h-2 rounded-full bg-gradient-to-r from-cyan-500 to-violet-500 transition-all duration-200"
                         style={{ width: `${cropProgress}%` }}
                       />
                     </div>
@@ -397,18 +411,18 @@ export default function DubbingForm() {
 
               {/* 버튼 */}
               {!isCropping && (
-                <div className="flex gap-2">
+                <div className="flex flex-col sm:flex-row gap-2">
                   <button
                     type="button"
                     onClick={handleCrop}
-                    className="flex-1 py-2.5 px-4 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-300 text-sm font-semibold rounded-xl transition-all"
+                    className="flex-1 py-3 px-4 bg-cyan-600/20 active:bg-cyan-600/40 border border-cyan-500/30 text-cyan-300 text-sm font-semibold rounded-xl transition-all touch-manipulation"
                   >
-                    ✂️ {fmtTime(cropStart)} ~ {fmtTime(cropEnd)} 크롭 ({fmtTime(Math.max(0, cropEnd - cropStart))})
+                    ✂️ {fmtTime(cropStart)} ~ {fmtTime(cropEnd)} 크롭
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowCropUI(false)}
-                    className="py-2.5 px-4 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 text-sm rounded-xl transition-all"
+                    className="py-3 px-4 bg-white/5 active:bg-white/15 border border-white/10 text-slate-400 text-sm rounded-xl transition-all touch-manipulation"
                   >
                     전체 더빙
                   </button>
