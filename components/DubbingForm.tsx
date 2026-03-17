@@ -65,8 +65,8 @@ export default function DubbingForm() {
 
   const handleFileChange = (selected: File | null | undefined) => {
     if (!selected) return;
-    if (selected.size > 100 * 1024 * 1024) {
-      setError("파일 크기가 100MB를 초과합니다. 더 작은 파일을 사용해주세요.");
+    if (selected.size > 500 * 1024 * 1024) {
+      setError("파일 크기가 500MB를 초과합니다. 더 작은 파일을 사용해주세요.");
       return;
     }
     if (originalVideoUrl) URL.revokeObjectURL(originalVideoUrl);
@@ -277,7 +277,7 @@ export default function DubbingForm() {
               </div>
               <div>
                 <p className="text-slate-300 font-medium text-sm">클릭하거나 파일을 드래그하세요</p>
-                <p className="text-xs text-slate-600 mt-1">MP3, WAV, MP4, WebM 등 · 최대 100MB</p>
+                <p className="text-xs text-slate-600 mt-1">MP3, WAV, MP4, WebM 등 · 최대 500MB</p>
               </div>
             </div>
           )}
