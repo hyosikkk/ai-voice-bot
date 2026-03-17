@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     }
 
     const blob = await put(`chunks/${uploadId}/${partNumber}`, chunk, {
-      access: "public",
+      access: "private",
       addRandomSuffix: false,
     });
 

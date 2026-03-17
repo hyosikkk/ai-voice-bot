@@ -39,7 +39,9 @@ export async function POST(request: NextRequest) {
     console.log(`청크 조합 중... (${chunkUrls.length}개)`);
     const chunkBuffers = await Promise.all(
       chunkUrls.map(async (url) => {
-        const res = await fetch(url);
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
+        });
         if (!res.ok) throw new Error("청크 다운로드 실패");
         return Buffer.from(await res.arrayBuffer());
       })
