@@ -59,6 +59,7 @@ export default function DubbingForm() {
   const [videoDuration, setVideoDuration] = useState(0);
   const [showCropUI, setShowCropUI] = useState(false);
   const [cropStart, setCropStart] = useState(0);
+  const [cropEnd, setCropEnd] = useState(0);
   const [cropStatus, setCropStatus] = useState<CropStatus>("idle");
   const [cropProgress, setCropProgress] = useState(0);
 
@@ -73,6 +74,7 @@ export default function DubbingForm() {
     setShowCropUI(false);
     setVideoDuration(0);
     setCropStart(0);
+    setCropEnd(0);
 
     if (selected.type.startsWith("video/")) {
       const url = URL.createObjectURL(selected);
@@ -83,7 +85,8 @@ export default function DubbingForm() {
       vid.src = url;
       vid.onloadedmetadata = () => {
         setVideoDuration(vid.duration);
-        if (vid.duration > 60) setShowCropUI(true);
+        setCropEnd(vid.duration);
+        setShowCropUI(true);
       };
     } else {
       setOriginalVideoUrl(null);
@@ -124,10 +127,11 @@ export default function DubbingForm() {
 
       setCropStatus("cropping");
       await ffmpeg.writeFile("input.mp4", await fetchFile(file));
+      const duration = cropEnd - cropStart;
       await ffmpeg.exec([
         "-ss", String(cropStart),
         "-i", "input.mp4",
-        "-t", "60",
+        "-t", String(duration),
         "-c", "copy",
         "output.mp4",
       ]);
@@ -219,6 +223,7 @@ export default function DubbingForm() {
     setShowCropUI(false);
     setVideoDuration(0);
     setCropStart(0);
+    setCropEnd(0);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -287,8 +292,8 @@ export default function DubbingForm() {
                 <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
-                <span className="text-sm font-semibold text-cyan-300">1분 크롭</span>
-                <span className="text-xs text-slate-500">영상 전체 길이: {fmtTime(videoDuration)}</span>
+                <span className="text-sm font-semibold text-cyan-300">구간 크롭</span>
+                <span className="text-xs text-slate-500">전체 길이: {fmtTime(videoDuration)}</span>
               </div>
               <button
                 type="button"
@@ -311,31 +316,56 @@ export default function DubbingForm() {
               )}
 
               {/* 시간 범위 표시 */}
-              <div className="flex items-center justify-between text-xs font-mono">
-                <span className="text-cyan-400">{fmtTime(cropStart)}</span>
+              <div className="flex items-center justify-center gap-3 text-sm font-mono">
+                <span className="text-cyan-400 font-semibold">{fmtTime(cropStart)}</span>
                 <span className="text-slate-500">→</span>
-                <span className="text-cyan-400">{fmtTime(Math.min(cropStart + 60, videoDuration))}</span>
+                <span className="text-cyan-400 font-semibold">{fmtTime(cropEnd)}</span>
+                <span className="text-xs text-slate-600 font-sans">({fmtTime(Math.max(0, cropEnd - cropStart))})</span>
               </div>
 
-              {/* 시작 지점 슬라이더 */}
+              {/* 시작 슬라이더 */}
               <div className="space-y-1">
-                <label className="text-xs text-slate-500">시작 지점 선택</label>
+                <div className="flex justify-between">
+                  <label className="text-xs text-slate-500">시작</label>
+                  <span className="text-xs font-mono text-cyan-400">{fmtTime(cropStart)}</span>
+                </div>
                 <input
                   type="range"
                   min={0}
-                  max={Math.max(0, videoDuration - 60)}
+                  max={Math.max(0, cropEnd - 1)}
                   step={1}
                   value={cropStart}
                   onChange={(e) => setCropStart(Number(e.target.value))}
                   disabled={isCropping}
                   className="w-full h-1.5 rounded-full appearance-none cursor-pointer disabled:opacity-50"
                   style={{
-                    background: `linear-gradient(to right, #06b6d4 ${(cropStart / Math.max(1, videoDuration - 60)) * 100}%, rgba(255,255,255,0.1) 0%)`,
+                    background: `linear-gradient(to right, #06b6d4 ${(cropStart / Math.max(1, videoDuration)) * 100}%, rgba(255,255,255,0.1) 0%)`,
+                  }}
+                />
+              </div>
+
+              {/* 종료 슬라이더 */}
+              <div className="space-y-1">
+                <div className="flex justify-between">
+                  <label className="text-xs text-slate-500">종료</label>
+                  <span className="text-xs font-mono text-cyan-400">{fmtTime(cropEnd)}</span>
+                </div>
+                <input
+                  type="range"
+                  min={Math.min(cropStart + 1, videoDuration)}
+                  max={videoDuration}
+                  step={1}
+                  value={cropEnd}
+                  onChange={(e) => setCropEnd(Number(e.target.value))}
+                  disabled={isCropping}
+                  className="w-full h-1.5 rounded-full appearance-none cursor-pointer disabled:opacity-50"
+                  style={{
+                    background: `linear-gradient(to right, rgba(255,255,255,0.1) ${(cropStart / Math.max(1, videoDuration)) * 100}%, #06b6d4 ${(cropStart / Math.max(1, videoDuration)) * 100}%, #06b6d4 ${(cropEnd / Math.max(1, videoDuration)) * 100}%, rgba(255,255,255,0.1) 0%)`,
                   }}
                 />
                 <div className="flex justify-between text-xs text-slate-600">
                   <span>{fmtTime(0)}</span>
-                  <span>{fmtTime(Math.max(0, videoDuration - 60))}</span>
+                  <span>{fmtTime(videoDuration)}</span>
                 </div>
               </div>
 
@@ -373,7 +403,7 @@ export default function DubbingForm() {
                     onClick={handleCrop}
                     className="flex-1 py-2.5 px-4 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-300 text-sm font-semibold rounded-xl transition-all"
                   >
-                    ✂️ {fmtTime(cropStart)} ~ {fmtTime(Math.min(cropStart + 60, videoDuration))} 크롭
+                    ✂️ {fmtTime(cropStart)} ~ {fmtTime(cropEnd)} 크롭 ({fmtTime(Math.max(0, cropEnd - cropStart))})
                   </button>
                   <button
                     type="button"
