@@ -12,6 +12,7 @@ type DubResult = {
 };
 
 type Step = "idle" | "uploading" | "transcribing" | "translating" | "synthesizing" | "done" | "error";
+type CropStatus = "idle" | "loading" | "cropping";
 
 const ACCEPTED_TYPES = [
   "audio/mpeg", "audio/mp3", "audio/wav", "audio/wave",
@@ -19,12 +20,11 @@ const ACCEPTED_TYPES = [
   "video/mp4", "video/webm", "video/quicktime",
 ].join(",");
 
-// 파이프라인 진행 단계 정보
-const PROCESS_STEPS: { key: Step; label: string; sublabel: string; icon: string }[] = [
-  { key: "uploading",    label: "파일 업로드",    sublabel: "Vercel Blob",   icon: "⬆️" },
-  { key: "transcribing", label: "음성 인식 STT",  sublabel: "ElevenLabs",   icon: "🎙️" },
-  { key: "translating",  label: "AI 번역",        sublabel: "Claude AI",    icon: "🌐" },
-  { key: "synthesizing", label: "음성 합성 TTS",  sublabel: "ElevenLabs",   icon: "🔊" },
+const PROCESS_STEPS: { key: Step; label: string; sublabel: string }[] = [
+  { key: "uploading",    label: "파일 업로드",   sublabel: "Vercel Blob" },
+  { key: "transcribing", label: "음성 인식 STT", sublabel: "ElevenLabs"  },
+  { key: "translating",  label: "AI 번역",       sublabel: "Claude AI"   },
+  { key: "synthesizing", label: "음성 합성 TTS", sublabel: "ElevenLabs"  },
 ];
 
 const STEP_ORDER: Step[] = ["uploading", "transcribing", "translating", "synthesizing", "done"];
@@ -38,6 +38,12 @@ function getStepStatus(current: Step, target: Step): "done" | "active" | "pendin
   return "pending";
 }
 
+function fmtTime(s: number) {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
 export default function DubbingForm() {
   const [file, setFile] = useState<File | null>(null);
   const [targetLanguage, setTargetLanguage] = useState("en");
@@ -49,20 +55,40 @@ export default function DubbingForm() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
+  // 크롭 상태
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [showCropUI, setShowCropUI] = useState(false);
+  const [cropStart, setCropStart] = useState(0);
+  const [cropStatus, setCropStatus] = useState<CropStatus>("idle");
+  const [cropProgress, setCropProgress] = useState(0);
+
   const handleFileChange = (selected: File | null | undefined) => {
     if (!selected) return;
     if (selected.size > 100 * 1024 * 1024) {
       setError("파일 크기가 100MB를 초과합니다. 더 작은 파일을 사용해주세요.");
       return;
     }
-    // 기존 오브젝트 URL 해제
     if (originalVideoUrl) URL.revokeObjectURL(originalVideoUrl);
 
+    setShowCropUI(false);
+    setVideoDuration(0);
+    setCropStart(0);
+
     if (selected.type.startsWith("video/")) {
-      setOriginalVideoUrl(URL.createObjectURL(selected));
+      const url = URL.createObjectURL(selected);
+      setOriginalVideoUrl(url);
+
+      // 영상 길이 확인
+      const vid = document.createElement("video");
+      vid.src = url;
+      vid.onloadedmetadata = () => {
+        setVideoDuration(vid.duration);
+        if (vid.duration > 60) setShowCropUI(true);
+      };
     } else {
       setOriginalVideoUrl(null);
     }
+
     setFile(selected);
     setResult(null);
     setError("");
@@ -75,6 +101,57 @@ export default function DubbingForm() {
     handleFileChange(e.dataTransfer.files?.[0]);
   };
 
+  // ffmpeg.wasm으로 1분 크롭
+  const handleCrop = async () => {
+    if (!file || !originalVideoUrl) return;
+    setCropStatus("loading");
+    setCropProgress(0);
+
+    try {
+      const { FFmpeg } = await import("@ffmpeg/ffmpeg");
+      const { fetchFile, toBlobURL } = await import("@ffmpeg/util");
+
+      const ffmpeg = new FFmpeg();
+      ffmpeg.on("progress", ({ progress: p }) => {
+        setCropProgress(Math.round(p * 100));
+      });
+
+      const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+      });
+
+      setCropStatus("cropping");
+      await ffmpeg.writeFile("input.mp4", await fetchFile(file));
+      await ffmpeg.exec([
+        "-ss", String(cropStart),
+        "-i", "input.mp4",
+        "-t", "60",
+        "-c", "copy",
+        "output.mp4",
+      ]);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data: any = await ffmpeg.readFile("output.mp4");
+      const buf = (data as Uint8Array).buffer.slice(0) as ArrayBuffer;
+      const croppedBlob = new Blob([buf], { type: "video/mp4" });
+      const croppedFile = new File([croppedBlob], `cropped_${file.name}`, { type: "video/mp4" });
+
+      URL.revokeObjectURL(originalVideoUrl);
+      const newUrl = URL.createObjectURL(croppedBlob);
+      setOriginalVideoUrl(newUrl);
+      setFile(croppedFile);
+      setShowCropUI(false);
+      setVideoDuration(0);
+    } catch (err) {
+      setError(`크롭 실패: ${(err as Error).message}`);
+    } finally {
+      setCropStatus("idle");
+      setCropProgress(0);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file) return;
@@ -83,11 +160,10 @@ export default function DubbingForm() {
     setResult(null);
 
     try {
-      // 1단계: 4MB 청크로 분할 업로드
       setStep("uploading");
       setUploadProgress(0);
 
-      const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
+      const CHUNK_SIZE = 4 * 1024 * 1024;
       const uploadId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
       const chunkUrls: string[] = [];
@@ -110,18 +186,12 @@ export default function DubbingForm() {
         setUploadProgress(Math.round(((i + 1) / totalChunks) * 100));
       }
 
-      // 2~4단계: 서버에서 청크 조합 → STT → 번역 → TTS 처리
       setStep("transcribing");
 
       const response = await fetch("/api/dub", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chunkUrls,
-          targetLanguage,
-          fileName: file.name,
-          mimeType: file.type,
-        }),
+        body: JSON.stringify({ chunkUrls, targetLanguage, fileName: file.name, mimeType: file.type }),
       });
 
       if (!response.ok) {
@@ -146,14 +216,17 @@ export default function DubbingForm() {
     setUploadProgress(0);
     if (originalVideoUrl) URL.revokeObjectURL(originalVideoUrl);
     setOriginalVideoUrl(null);
+    setShowCropUI(false);
+    setVideoDuration(0);
+    setCropStart(0);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const isProcessing = ["uploading", "transcribing", "translating", "synthesizing"].includes(step);
+  const isCropping = cropStatus !== "idle";
 
   return (
     <div className="space-y-6">
-      {/* 업로드 폼 */}
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* 파일 드롭존 */}
         <div
@@ -164,7 +237,7 @@ export default function DubbingForm() {
                 ? "border-violet-500/50 bg-violet-500/5"
                 : "border-white/10 hover:border-white/20 hover:bg-white/[0.02]"
             }`}
-          onClick={() => !isProcessing && fileInputRef.current?.click()}
+          onClick={() => !isProcessing && !isCropping && fileInputRef.current?.click()}
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
           onDragLeave={() => setIsDragging(false)}
           onDrop={handleDrop}
@@ -175,7 +248,7 @@ export default function DubbingForm() {
             accept={ACCEPTED_TYPES}
             onChange={(e) => handleFileChange(e.target.files?.[0])}
             className="hidden"
-            disabled={isProcessing}
+            disabled={isProcessing || isCropping}
           />
           {file ? (
             <div className="space-y-2">
@@ -186,7 +259,7 @@ export default function DubbingForm() {
               </div>
               <p className="font-semibold text-violet-300 text-sm">{file.name}</p>
               <p className="text-xs text-slate-500">{(file.size / (1024 * 1024)).toFixed(2)} MB</p>
-              {!isProcessing && (
+              {!isProcessing && !isCropping && (
                 <p className="text-xs text-slate-600">클릭하여 파일 변경</p>
               )}
             </div>
@@ -205,6 +278,116 @@ export default function DubbingForm() {
           )}
         </div>
 
+        {/* ===== 1분 크롭 UI ===== */}
+        {showCropUI && !isProcessing && (
+          <div className="glass rounded-xl border border-cyan-500/20 bg-cyan-500/5 overflow-hidden">
+            {/* 헤더 */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+                <span className="text-sm font-semibold text-cyan-300">1분 크롭</span>
+                <span className="text-xs text-slate-500">영상 전체 길이: {fmtTime(videoDuration)}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCropUI(false)}
+                className="text-xs text-slate-600 hover:text-slate-400 transition-colors"
+              >
+                건너뛰기
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4">
+              {/* 미리보기 + 슬라이더 */}
+              {originalVideoUrl && (
+                <video
+                  src={originalVideoUrl}
+                  className="w-full rounded-lg max-h-40 object-contain bg-black/30"
+                  controls
+                  playsInline
+                />
+              )}
+
+              {/* 시간 범위 표시 */}
+              <div className="flex items-center justify-between text-xs font-mono">
+                <span className="text-cyan-400">{fmtTime(cropStart)}</span>
+                <span className="text-slate-500">→</span>
+                <span className="text-cyan-400">{fmtTime(Math.min(cropStart + 60, videoDuration))}</span>
+              </div>
+
+              {/* 시작 지점 슬라이더 */}
+              <div className="space-y-1">
+                <label className="text-xs text-slate-500">시작 지점 선택</label>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, videoDuration - 60)}
+                  step={1}
+                  value={cropStart}
+                  onChange={(e) => setCropStart(Number(e.target.value))}
+                  disabled={isCropping}
+                  className="w-full h-1.5 rounded-full appearance-none cursor-pointer disabled:opacity-50"
+                  style={{
+                    background: `linear-gradient(to right, #06b6d4 ${(cropStart / Math.max(1, videoDuration - 60)) * 100}%, rgba(255,255,255,0.1) 0%)`,
+                  }}
+                />
+                <div className="flex justify-between text-xs text-slate-600">
+                  <span>{fmtTime(0)}</span>
+                  <span>{fmtTime(Math.max(0, videoDuration - 60))}</span>
+                </div>
+              </div>
+
+              {/* 크롭 진행 표시 */}
+              {isCropping && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-slate-400">
+                    <span className="flex items-center gap-1.5">
+                      <svg className="w-3 h-3 animate-spin text-cyan-400" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      {cropStatus === "loading" ? "WASM 엔진 로딩 중..." : "크롭 처리 중..."}
+                    </span>
+                    {cropStatus === "cropping" && (
+                      <span className="text-cyan-400 font-mono">{cropProgress}%</span>
+                    )}
+                  </div>
+                  {cropStatus === "cropping" && (
+                    <div className="w-full bg-white/5 rounded-full h-1">
+                      <div
+                        className="h-1 rounded-full bg-gradient-to-r from-cyan-500 to-violet-500 transition-all duration-200"
+                        style={{ width: `${cropProgress}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 버튼 */}
+              {!isCropping && (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCrop}
+                    className="flex-1 py-2.5 px-4 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-300 text-sm font-semibold rounded-xl transition-all"
+                  >
+                    ✂️ {fmtTime(cropStart)} ~ {fmtTime(Math.min(cropStart + 60, videoDuration))} 크롭
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowCropUI(false)}
+                    className="py-2.5 px-4 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 text-sm rounded-xl transition-all"
+                  >
+                    전체 더빙
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* 목표 언어 선택 */}
         <div>
           <label className="block text-sm font-medium text-slate-400 mb-2">
@@ -213,7 +396,7 @@ export default function DubbingForm() {
           <select
             value={targetLanguage}
             onChange={(e) => setTargetLanguage(e.target.value)}
-            disabled={isProcessing}
+            disabled={isProcessing || isCropping}
             className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:ring-1 focus:ring-violet-500/50 focus:border-violet-500/50 disabled:opacity-50 cursor-pointer"
           >
             {SUPPORTED_LANGUAGES.map((lang) => (
@@ -227,7 +410,7 @@ export default function DubbingForm() {
         {/* 제출 버튼 */}
         <button
           type="submit"
-          disabled={!file || isProcessing}
+          disabled={!file || isProcessing || isCropping}
           className="btn-glow w-full py-3.5 px-6 bg-gradient-to-r from-violet-600 to-cyan-600 hover:from-violet-500 hover:to-cyan-500 disabled:from-slate-700 disabled:to-slate-700 disabled:shadow-none text-white font-semibold rounded-xl transition-all duration-200 disabled:cursor-not-allowed text-sm"
         >
           {isProcessing ? (
@@ -238,20 +421,17 @@ export default function DubbingForm() {
               </svg>
               처리 중...
             </span>
-          ) : "더빙 시작 →"}
+          ) : isCropping ? "크롭 중..." : "더빙 시작 →"}
         </button>
       </form>
 
       {/* ===== 진행 상태 표시 ===== */}
       {isProcessing && (
         <div className="glass rounded-xl p-5 border border-violet-500/20 space-y-4">
-          {/* 헤더 */}
           <div className="flex items-center gap-3">
             <div className="w-2 h-2 rounded-full bg-violet-500 animate-pulse" />
             <p className="text-sm font-semibold text-violet-300">AI 더빙 파이프라인 실행 중</p>
           </div>
-
-          {/* 단계 목록 */}
           <div className="space-y-2">
             {PROCESS_STEPS.map((ps, i) => {
               const status = getStepStatus(step, ps.key);
@@ -266,13 +446,10 @@ export default function DubbingForm() {
                         : "bg-white/[0.02] border border-white/5"
                   }`}
                 >
-                  {/* 상태 아이콘 */}
                   <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-sm ${
-                    status === "active"
-                      ? "bg-violet-500/30 neon-ring"
-                      : status === "done"
-                        ? "bg-emerald-500/25"
-                        : "bg-white/5"
+                    status === "active" ? "bg-violet-500/30 neon-ring"
+                    : status === "done" ? "bg-emerald-500/25"
+                    : "bg-white/5"
                   }`}>
                     {status === "done"
                       ? <span className="text-emerald-400 text-xs">✓</span>
@@ -284,24 +461,16 @@ export default function DubbingForm() {
                         : <span className="text-slate-600 text-xs">{i + 1}</span>
                     }
                   </div>
-
-                  {/* 단계명 */}
                   <div className="flex-1 min-w-0">
                     <span className={`text-sm font-medium ${
                       status === "active" ? "text-violet-200"
                       : status === "done" ? "text-emerald-400"
                       : "text-slate-600"
-                    }`}>
-                      {ps.label}
-                    </span>
+                    }`}>{ps.label}</span>
                     <span className={`ml-2 text-xs font-mono ${
                       status === "active" ? "text-violet-500" : "text-slate-700"
-                    }`}>
-                      {ps.sublabel}
-                    </span>
+                    }`}>{ps.sublabel}</span>
                   </div>
-
-                  {/* 업로드 진행률 */}
                   {ps.key === "uploading" && status === "active" && (
                     <span className="text-xs font-mono text-violet-400 flex-shrink-0">{uploadProgress}%</span>
                   )}
@@ -309,22 +478,15 @@ export default function DubbingForm() {
               );
             })}
           </div>
-
-          {/* 업로드 프로그레스 바 */}
           {step === "uploading" && (
-            <div>
-              <div className="w-full bg-white/5 rounded-full h-1">
-                <div
-                  className="h-1 rounded-full bg-gradient-to-r from-violet-500 to-cyan-500 transition-all duration-200"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
+            <div className="w-full bg-white/5 rounded-full h-1">
+              <div
+                className="h-1 rounded-full bg-gradient-to-r from-violet-500 to-cyan-500 transition-all duration-200"
+                style={{ width: `${uploadProgress}%` }}
+              />
             </div>
           )}
-
-          <p className="text-xs text-slate-600 text-center">
-            최대 5분 소요될 수 있습니다
-          </p>
+          <p className="text-xs text-slate-600 text-center">최대 5분 소요될 수 있습니다</p>
         </div>
       )}
 
@@ -359,10 +521,7 @@ export default function DubbingForm() {
               <div className="w-2 h-2 rounded-full bg-emerald-400" />
               <h2 className="text-base font-semibold text-white">더빙 완료</h2>
             </div>
-            <button
-              onClick={handleReset}
-              className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
-            >
+            <button onClick={handleReset} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
               새 파일 더빙 →
             </button>
           </div>
