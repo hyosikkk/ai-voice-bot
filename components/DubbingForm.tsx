@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { upload } from "@vercel/blob/client";
 import AudioPlayer from "./AudioPlayer";
 import { SUPPORTED_LANGUAGES } from "@/lib/elevenlabs";
 
@@ -52,8 +51,8 @@ export default function DubbingForm() {
 
   const handleFileChange = (selected: File | null | undefined) => {
     if (!selected) return;
-    if (selected.size > 500 * 1024 * 1024) {
-      setError("파일 크기가 500MB를 초과합니다. 더 작은 파일을 사용해주세요.");
+    if (selected.size > 100 * 1024 * 1024) {
+      setError("파일 크기가 100MB를 초과합니다. 더 작은 파일을 사용해주세요.");
       return;
     }
     // 기존 오브젝트 URL 해제
@@ -84,28 +83,44 @@ export default function DubbingForm() {
     setResult(null);
 
     try {
-      // 1단계: Vercel Blob에 직접 업로드 (최대 500MB)
+      // 1단계: 4MB 청크로 분할 업로드
       setStep("uploading");
       setUploadProgress(0);
 
-      const blob = await upload(file.name, file, {
-        access: "public",
-        handleUploadUrl: "/api/upload",
-        onUploadProgress: ({ percentage }) => {
-          setUploadProgress(Math.round(percentage));
-        },
-      });
+      const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
+      const uploadId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const chunkUrls: string[] = [];
 
-      // 2~4단계: 서버에서 STT → 번역 → TTS 처리
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const chunk = file.slice(start, Math.min(start + CHUNK_SIZE, file.size));
+        const formData = new FormData();
+        formData.append("chunk", chunk, `chunk_${i}`);
+        formData.append("uploadId", uploadId);
+        formData.append("partNumber", String(i));
+
+        const res = await fetch("/api/upload-chunk", { method: "POST", body: formData });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `파일 업로드 실패 (${i + 1}/${totalChunks})`);
+        }
+        const { chunkUrl } = await res.json();
+        chunkUrls.push(chunkUrl);
+        setUploadProgress(Math.round(((i + 1) / totalChunks) * 100));
+      }
+
+      // 2~4단계: 서버에서 청크 조합 → STT → 번역 → TTS 처리
       setStep("transcribing");
 
       const response = await fetch("/api/dub", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          blobUrl: blob.url,
+          chunkUrls,
           targetLanguage,
           fileName: file.name,
+          mimeType: file.type,
         }),
       });
 
@@ -184,7 +199,7 @@ export default function DubbingForm() {
               </div>
               <div>
                 <p className="text-slate-300 font-medium text-sm">클릭하거나 파일을 드래그하세요</p>
-                <p className="text-xs text-slate-600 mt-1">MP3, WAV, MP4, WebM 등 · 최대 500MB</p>
+                <p className="text-xs text-slate-600 mt-1">MP3, WAV, MP4, WebM 등 · 최대 100MB</p>
               </div>
             </div>
           )}

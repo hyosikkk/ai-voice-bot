@@ -14,17 +14,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
   }
 
-  let blobUrl: string | null = null;
+  let chunkUrls: string[] = [];
 
   try {
     const body = await request.json();
-    blobUrl = body.blobUrl as string;
+    chunkUrls = body.chunkUrls as string[];
     const targetLanguage = body.targetLanguage as string;
     const fileName = body.fileName as string;
+    const mimeType = (body.mimeType as string) || "audio/mpeg";
 
-    if (!blobUrl || !targetLanguage) {
+    if (!chunkUrls?.length || !targetLanguage) {
       return NextResponse.json(
-        { error: "blobUrl과 targetLanguage는 필수입니다" },
+        { error: "chunkUrls와 targetLanguage는 필수입니다" },
         { status: 400 }
       );
     }
@@ -34,13 +35,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "지원하지 않는 언어입니다" }, { status: 400 });
     }
 
-    // Vercel Blob에서 파일 다운로드
-    const fileResponse = await fetch(blobUrl);
-    if (!fileResponse.ok) throw new Error("파일을 불러오지 못했습니다");
-
-    const mimeType = fileResponse.headers.get("content-type") || "audio/mpeg";
-    const fileArrayBuffer = await fileResponse.arrayBuffer();
-    const fileBuffer = Buffer.from(fileArrayBuffer);
+    // 청크 다운로드 및 조합
+    console.log(`청크 조합 중... (${chunkUrls.length}개)`);
+    const chunkBuffers = await Promise.all(
+      chunkUrls.map(async (url) => {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("청크 다운로드 실패");
+        return Buffer.from(await res.arrayBuffer());
+      })
+    );
+    const fileBuffer = Buffer.concat(chunkBuffers);
 
     console.log("1단계: 음성 인식(STT) 처리 중...");
     const transcription = await transcribeAudio(fileBuffer, mimeType);
@@ -72,9 +76,9 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   } finally {
-    // 처리 완료 후 Blob 삭제 (스토리지 절약)
-    if (blobUrl) {
-      await del(blobUrl).catch(() => {});
+    // 청크 삭제
+    if (chunkUrls.length > 0) {
+      await Promise.all(chunkUrls.map((url) => del(url).catch(() => {})));
     }
   }
 }
