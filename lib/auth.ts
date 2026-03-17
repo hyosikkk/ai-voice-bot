@@ -18,6 +18,7 @@ export const authOptions: NextAuthOptions = {
         // 테이블이 없으면 생성하고 초기 데이터 삽입
         await ensureDb();
         const allowed = await isEmailWhitelisted(user.email);
+        console.log(`[로그인] ${user.email} (${user.name}) - ${allowed ? "허용" : "거부"} - ${new Date().toISOString()}`);
         return allowed;
       } catch (error) {
         console.error("화이트리스트 확인 오류:", error);
