@@ -253,7 +253,9 @@ function MergeDownloadButton({
       await ffmpeg.exec([
         "-i", "video.mp4",
         "-i", "audio.mp3",
-        "-c:v", "copy",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
         "-c:a", "aac",
         "-map", "0:v:0",
         "-map", "1:a:0",
