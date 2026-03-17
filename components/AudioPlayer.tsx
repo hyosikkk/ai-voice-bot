@@ -28,6 +28,7 @@ function VideoPanel({
   muted,
   syncVideoRef,
   syncAudioRef,
+  onRateChange,
 }: {
   label: string;
   badge: string;
@@ -37,6 +38,7 @@ function VideoPanel({
   muted: boolean;
   syncVideoRef?: React.RefObject<HTMLVideoElement | null>;
   syncAudioRef?: React.RefObject<HTMLAudioElement | null>;
+  onRateChange?: (rate: number) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -74,6 +76,7 @@ function VideoPanel({
           const rate = Math.min(Math.max(audio.duration / video.duration, 0.5), 4.0);
           // 더빙 음성의 재생 속도를 조정해 영상 길이에 맞춤
           audio.playbackRate = rate;
+          onRateChange?.(rate);
         }
       };
 
@@ -219,10 +222,12 @@ function MergeDownloadButton({
   originalVideoUrl,
   audioUrl,
   fileName,
+  playbackRate,
 }: {
   originalVideoUrl: string;
   audioUrl: string;
   fileName: string;
+  playbackRate: number;
 }) {
   const [status, setStatus] = useState<"idle" | "loading" | "merging" | "done" | "error">("idle");
   const [progress, setProgress] = useState(0);
@@ -250,6 +255,11 @@ function MergeDownloadButton({
       setStatus("merging");
       await ffmpeg.writeFile("video.mp4", await fetchFile(originalVideoUrl));
       await ffmpeg.writeFile("audio.mp3", await fetchFile(audioUrl));
+      // atempo 범위: 0.5~2.0, 초과 시 체이닝
+      const atempoFilter = playbackRate > 2.0
+        ? `atempo=2.0,atempo=${(playbackRate / 2.0).toFixed(4)}`
+        : `atempo=${playbackRate.toFixed(4)}`;
+
       await ffmpeg.exec([
         "-i", "video.mp4",
         "-i", "audio.mp3",
@@ -257,6 +267,7 @@ function MergeDownloadButton({
         "-preset", "medium",
         "-crf", "23",
         "-c:a", "aac",
+        "-af", atempoFilter,
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-shortest",
@@ -357,6 +368,7 @@ export default function AudioPlayer({
   originalVideoUrl,
 }: AudioPlayerProps) {
   const isVideo = !!originalVideoUrl;
+  const [playbackRate, setPlaybackRate] = useState(1.0);
 
   return (
     <div className="space-y-4">
@@ -389,6 +401,7 @@ export default function AudioPlayer({
               videoUrl={originalVideoUrl}
               audioUrl={audioUrl}
               muted={true}
+              onRateChange={setPlaybackRate}
             />
           </div>
 
@@ -398,6 +411,7 @@ export default function AudioPlayer({
               originalVideoUrl={originalVideoUrl}
               audioUrl={audioUrl}
               fileName={fileName}
+              playbackRate={playbackRate}
             />
             <a
               href={audioUrl}
