@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { upload } from "@vercel/blob/client";
 import AudioPlayer from "./AudioPlayer";
 import { SUPPORTED_LANGUAGES } from "@/lib/elevenlabs";
 
@@ -51,8 +52,8 @@ export default function DubbingForm() {
 
   const handleFileChange = (selected: File | null | undefined) => {
     if (!selected) return;
-    if (selected.size > 100 * 1024 * 1024) {
-      setError("파일 크기가 100MB를 초과합니다. 더 작은 파일을 사용해주세요.");
+    if (selected.size > 500 * 1024 * 1024) {
+      setError("파일 크기가 500MB를 초과합니다. 더 작은 파일을 사용해주세요.");
       return;
     }
     // 기존 오브젝트 URL 해제
@@ -83,28 +84,29 @@ export default function DubbingForm() {
     setResult(null);
 
     try {
+      // 1단계: Vercel Blob에 직접 업로드 (최대 500MB)
       setStep("uploading");
       setUploadProgress(0);
 
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("fileName", file.name);
-      formData.append("targetLanguage", targetLanguage);
+      const blob = await upload(file.name, file, {
+        access: "public",
+        handleUploadUrl: "/api/upload",
+        onUploadProgress: ({ percentage }) => {
+          setUploadProgress(Math.round(percentage));
+        },
+      });
 
-      const response = await new Promise<Response>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            setUploadProgress(Math.round((e.loaded / e.total) * 100));
-          }
-        };
-        xhr.onload = () => {
-          setStep("transcribing");
-          resolve(new Response(xhr.responseText, { status: xhr.status }));
-        };
-        xhr.onerror = () => reject(new Error("네트워크 오류가 발생했습니다"));
-        xhr.open("POST", "/api/dub");
-        xhr.send(formData);
+      // 2~4단계: 서버에서 STT → 번역 → TTS 처리
+      setStep("transcribing");
+
+      const response = await fetch("/api/dub", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          blobUrl: blob.url,
+          targetLanguage,
+          fileName: file.name,
+        }),
       });
 
       if (!response.ok) {
@@ -182,7 +184,7 @@ export default function DubbingForm() {
               </div>
               <div>
                 <p className="text-slate-300 font-medium text-sm">클릭하거나 파일을 드래그하세요</p>
-                <p className="text-xs text-slate-600 mt-1">MP3, WAV, MP4, WebM 등 · 최대 100MB</p>
+                <p className="text-xs text-slate-600 mt-1">MP3, WAV, MP4, WebM 등 · 최대 500MB</p>
               </div>
             </div>
           )}
