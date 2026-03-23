@@ -4,11 +4,28 @@ import { useState, useRef } from "react";
 import AudioPlayer from "./AudioPlayer";
 import { SUPPORTED_LANGUAGES } from "@/lib/elevenlabs";
 
+type SubtitleCue = {
+  start: number;
+  end: number;
+  original: string;
+  translated: string;
+};
+
+type SyncEntry = {
+  origStart: number;
+  origEnd: number;
+  dubStart: number;
+  dubEnd: number;
+  rate: number;
+};
+
 type DubResult = {
   transcription: string;
   translatedText: string;
   audioUrl: string;
   fileName: string;
+  subtitles?: SubtitleCue[];
+  syncMap?: SyncEntry[];
 };
 
 type Step = "idle" | "uploading" | "transcribing" | "translating" | "synthesizing" | "done" | "error";
@@ -576,6 +593,8 @@ export default function DubbingForm() {
             translatedText={result.translatedText}
             targetLanguage={targetLanguage}
             originalVideoUrl={originalVideoUrl ?? undefined}
+            subtitles={result.subtitles}
+            syncMap={result.syncMap}
           />
         </div>
       )}

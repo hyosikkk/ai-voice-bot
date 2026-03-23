@@ -1,6 +1,21 @@
 "use client";
 
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
+
+interface SubtitleCue {
+  start: number;
+  end: number;
+  original: string;
+  translated: string;
+}
+
+interface SyncEntry {
+  origStart: number;
+  origEnd: number;
+  dubStart: number;
+  dubEnd: number;
+  rate: number;
+}
 
 interface AudioPlayerProps {
   audioUrl: string;
@@ -9,6 +24,8 @@ interface AudioPlayerProps {
   translatedText: string;
   targetLanguage: string;
   originalVideoUrl?: string;
+  subtitles?: SubtitleCue[];
+  syncMap?: SyncEntry[];
 }
 
 const LANGUAGE_LABELS: Record<string, string> = {
@@ -16,7 +33,92 @@ const LANGUAGE_LABELS: Record<string, string> = {
   en: "English",
   ja: "日本語",
   es: "Español",
+  fr: "Français",
+  de: "Deutsch",
+  zh: "中文",
+  ar: "العربية",
+  it: "Italiano",
+  pt: "Português",
 };
+
+type SubtitleMode = "off" | "original" | "translated" | "both";
+
+// SRT 형식 생성
+function toSRT(cues: SubtitleCue[], mode: "original" | "translated"): string {
+  return cues
+    .map((c, i) => {
+      const fmt = (s: number) => {
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const sec = Math.floor(s % 60);
+        const ms = Math.round((s % 1) * 1000);
+        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+      };
+      const text = mode === "original" ? c.original : c.translated;
+      return `${i + 1}\n${fmt(c.start)} --> ${fmt(c.end)}\n${text}\n`;
+    })
+    .join("\n");
+}
+
+// ─── 자막 오버레이 ────────────────────────────────────────────────
+function SubtitleOverlay({
+  cues,
+  currentTime,
+  mode,
+}: {
+  cues: SubtitleCue[];
+  currentTime: number;
+  mode: SubtitleMode;
+}) {
+  if (mode === "off" || cues.length === 0) return null;
+  const active = cues.find((c) => currentTime >= c.start && currentTime <= c.end);
+  if (!active) return null;
+
+  return (
+    <div className="absolute bottom-12 left-0 right-0 flex justify-center pointer-events-none px-4">
+      <div className="max-w-[90%] text-center space-y-0.5">
+        {(mode === "original" || mode === "both") && (
+          <div
+            className="inline-block px-3 py-1 rounded text-sm font-medium leading-snug"
+            style={{ background: "rgba(0,0,0,0.72)", color: "#e2e8f0", textShadow: "0 1px 3px #000" }}
+          >
+            {active.original}
+          </div>
+        )}
+        {mode === "both" && <div />}
+        {(mode === "translated" || mode === "both") && (
+          <div
+            className="inline-block px-3 py-1 rounded text-sm font-semibold leading-snug"
+            style={{ background: "rgba(0,0,0,0.80)", color: "#c4b5fd", textShadow: "0 1px 4px #000" }}
+          >
+            {active.translated}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// 세그먼트 인덱스 검색 (이진 탐색)
+function findSegmentIndex(syncMap: SyncEntry[], t: number): number {
+  for (let i = 0; i < syncMap.length; i++) {
+    if (t >= syncMap[i].origStart && t < syncMap[i].origEnd) return i;
+  }
+  return -1;
+}
+
+// syncMap 기준 오디오 목표 위치 계산
+function calcDubTime(syncMap: SyncEntry[], videoTime: number): number {
+  const idx = findSegmentIndex(syncMap, videoTime);
+  if (idx === -1) {
+    // 구간 밖: 비례 추정 (마지막 세그먼트 이후 등)
+    const last = syncMap[syncMap.length - 1];
+    if (last && videoTime >= last.origEnd) return last.dubEnd;
+    return 0;
+  }
+  const s = syncMap[idx];
+  return s.dubStart + (videoTime - s.origStart) * s.rate;
+}
 
 // ─── 비디오 패널 (원본 or 더빙) ──────────────────────────────────
 function VideoPanel({
@@ -29,6 +131,9 @@ function VideoPanel({
   syncVideoRef,
   syncAudioRef,
   onRateChange,
+  subtitleCues,
+  subtitleMode,
+  syncMap,
 }: {
   label: string;
   badge: string;
@@ -39,6 +144,9 @@ function VideoPanel({
   syncVideoRef?: React.RefObject<HTMLVideoElement | null>;
   syncAudioRef?: React.RefObject<HTMLAudioElement | null>;
   onRateChange?: (rate: number) => void;
+  subtitleCues?: SubtitleCue[];
+  subtitleMode?: SubtitleMode;
+  syncMap?: SyncEntry[];
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -46,6 +154,7 @@ function VideoPanel({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isHovering, setIsHovering] = useState(false);
+  const lastSegIdxRef = useRef(-1);
 
   // sync refs를 외부로 노출
   useEffect(() => {
@@ -53,6 +162,7 @@ function VideoPanel({
     if (syncAudioRef) (syncAudioRef as React.MutableRefObject<HTMLAudioElement | null>).current = audioRef.current;
   });
 
+  // ── 메타데이터 + 기본 이벤트 ──
   useEffect(() => {
     const video = videoRef.current;
     const audio = audioRef.current;
@@ -64,7 +174,6 @@ function VideoPanel({
     timeEl.addEventListener("timeupdate", onTime);
     timeEl.addEventListener("ended", onEnded);
 
-    // 더빙 패널: 비디오와 오디오 둘 다 로드되면 playbackRate 자동 조정
     if (audioUrl && video && audio) {
       let videoReady = false;
       let audioReady = false;
@@ -72,11 +181,17 @@ function VideoPanel({
       const trySync = () => {
         if (!videoReady || !audioReady) return;
         setDuration(video.duration);
-        if (audio.duration > 0 && video.duration > 0) {
-          const rate = Math.min(Math.max(audio.duration / video.duration, 0.5), 4.0);
-          // 더빙 음성의 재생 속도를 조정해 영상 길이에 맞춤
-          audio.playbackRate = rate;
-          onRateChange?.(rate);
+        // syncMap이 있으면 per-segment 처리; 없으면 전역 비율
+        if (!syncMap || syncMap.length === 0) {
+          if (audio.duration > 0 && video.duration > 0) {
+            const rate = Math.min(Math.max(audio.duration / video.duration, 0.5), 4.0);
+            audio.playbackRate = rate;
+            onRateChange?.(rate);
+          }
+        } else {
+          // 첫 세그먼트 rate로 초기 설정
+          audio.playbackRate = syncMap[0].rate;
+          onRateChange?.(1.0); // 다운로드용 global rate는 1.0 (filter_complex로 처리)
         }
       };
 
@@ -100,7 +215,39 @@ function VideoPanel({
       timeEl.removeEventListener("timeupdate", onTime);
       timeEl.removeEventListener("ended", onEnded);
     };
-  }, [audioUrl]);
+  }, [audioUrl, syncMap]);
+
+  // ── 세그먼트별 싱크 (syncMap이 있을 때만) ──
+  useEffect(() => {
+    if (!audioUrl || !syncMap || syncMap.length === 0) return;
+    const video = videoRef.current;
+    const audio = audioRef.current;
+    if (!video || !audio) return;
+
+    const onTimeUpdate = () => {
+      const vt = video.currentTime;
+      const segIdx = findSegmentIndex(syncMap, vt);
+      if (segIdx === -1) return;
+      const seg = syncMap[segIdx];
+
+      if (segIdx !== lastSegIdxRef.current) {
+        // 세그먼트 경계 진입 → 오디오 위치 하드싱크 + 속도 변경
+        const target = seg.dubStart + (vt - seg.origStart) * seg.rate;
+        audio.currentTime = target;
+        audio.playbackRate = Math.min(Math.max(seg.rate, 0.25), 4.0);
+        lastSegIdxRef.current = segIdx;
+      } else {
+        // 세그먼트 내 드리프트 보정 (±0.3s 이상 벗어나면 재동기)
+        const expected = seg.dubStart + (vt - seg.origStart) * seg.rate;
+        if (Math.abs(audio.currentTime - expected) > 0.3) {
+          audio.currentTime = expected;
+        }
+      }
+    };
+
+    video.addEventListener("timeupdate", onTimeUpdate);
+    return () => video.removeEventListener("timeupdate", onTimeUpdate);
+  }, [audioUrl, syncMap]);
 
   const togglePlay = () => {
     const video = videoRef.current;
@@ -111,6 +258,7 @@ function VideoPanel({
       audio?.pause();
       setIsPlaying(false);
     } else {
+      lastSegIdxRef.current = -1; // 재생 재시작 시 세그먼트 리셋
       video.play();
       audio?.play();
       setIsPlaying(true);
@@ -120,7 +268,17 @@ function VideoPanel({
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const t = parseFloat(e.target.value);
     if (videoRef.current) videoRef.current.currentTime = t;
-    if (audioUrl && audioRef.current) audioRef.current.currentTime = t;
+    if (audioUrl && audioRef.current) {
+      if (syncMap && syncMap.length > 0) {
+        const dubTime = calcDubTime(syncMap, t);
+        audioRef.current.currentTime = dubTime;
+        const seg = syncMap[findSegmentIndex(syncMap, t)];
+        if (seg) audioRef.current.playbackRate = Math.min(Math.max(seg.rate, 0.25), 4.0);
+        lastSegIdxRef.current = findSegmentIndex(syncMap, t);
+      } else {
+        audioRef.current.currentTime = t;
+      }
+    }
     setCurrentTime(t);
   };
 
@@ -154,6 +312,15 @@ function VideoPanel({
           playsInline
         />
         {audioUrl && <audio ref={audioRef} src={audioUrl} />}
+
+        {/* 자막 오버레이 */}
+        {subtitleCues && subtitleMode && subtitleMode !== "off" && (
+          <SubtitleOverlay
+            cues={subtitleCues}
+            currentTime={currentTime}
+            mode={subtitleMode}
+          />
+        )}
 
         {/* 재생 오버레이 */}
         <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${
@@ -217,17 +384,55 @@ function VideoPanel({
   );
 }
 
+// atempo 체이닝 헬퍼 (범위: 0.5~4.0)
+function buildAtempo(rate: number): string {
+  const r = Math.min(Math.max(rate, 0.5), 4.0);
+  if (r > 2.0) return `atempo=2.0,atempo=${(r / 2.0).toFixed(4)}`;
+  return `atempo=${r.toFixed(4)}`;
+}
+
+// 세그먼트별 filter_complex 생성
+function buildSegmentFilterComplex(syncMap: SyncEntry[]): string | null {
+  const parts: string[] = [];
+  const labels: string[] = [];
+
+  for (let i = 0; i < syncMap.length; i++) {
+    const s = syncMap[i];
+    const dubDur = s.dubEnd - s.dubStart;
+    if (dubDur < 0.05) continue;
+    const atempo = buildAtempo(s.rate);
+    const delayMs = Math.round(s.origStart * 1000);
+    const label = `s${i}`;
+    parts.push(
+      `[1:a]atrim=start=${s.dubStart.toFixed(3)}:end=${s.dubEnd.toFixed(3)},asetpts=PTS-STARTPTS,${atempo},adelay=${delayMs}|${delayMs}[${label}]`
+    );
+    labels.push(`[${label}]`);
+  }
+  if (labels.length === 0) return null;
+  if (labels.length === 1) return parts[0];
+  return [
+    ...parts,
+    `${labels.join("")}amix=inputs=${labels.length}:normalize=0:dropout_transition=0[outa]`,
+  ].join(";");
+}
+
 // ─── 더빙 비디오 다운로드 버튼 ────────────────────────────────────
 function MergeDownloadButton({
   originalVideoUrl,
   audioUrl,
   fileName,
   playbackRate,
+  subtitles,
+  targetLanguage,
+  syncMap,
 }: {
   originalVideoUrl: string;
   audioUrl: string;
   fileName: string;
   playbackRate: number;
+  subtitles?: SubtitleCue[];
+  targetLanguage: string;
+  syncMap?: SyncEntry[];
 }) {
   const [status, setStatus] = useState<"idle" | "loading" | "merging" | "done" | "error">("idle");
   const [progress, setProgress] = useState(0);
@@ -245,7 +450,6 @@ function MergeDownloadButton({
         setProgress(Math.round(p * 100));
       });
 
-      setStatus("loading");
       const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
       await ffmpeg.load({
         coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
@@ -255,24 +459,52 @@ function MergeDownloadButton({
       setStatus("merging");
       await ffmpeg.writeFile("video.mp4", await fetchFile(originalVideoUrl));
       await ffmpeg.writeFile("audio.mp3", await fetchFile(audioUrl));
-      // atempo 범위: 0.5~2.0, 초과 시 체이닝
-      const atempoFilter = playbackRate > 2.0
-        ? `atempo=2.0,atempo=${(playbackRate / 2.0).toFixed(4)}`
-        : `atempo=${playbackRate.toFixed(4)}`;
 
-      await ffmpeg.exec([
-        "-i", "video.mp4",
-        "-i", "audio.mp3",
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "23",
-        "-c:a", "aac",
-        "-af", atempoFilter,
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-shortest",
-        "output.mp4",
-      ]);
+      const hasSubs = subtitles && subtitles.length > 0;
+      if (hasSubs) {
+        const srtContent = toSRT(subtitles!, "translated");
+        await ffmpeg.writeFile("subtitles.srt", new TextEncoder().encode(srtContent));
+      }
+
+      // 세그먼트별 filter_complex 우선, 없으면 전역 atempo 폴백
+      const segFilter = syncMap && syncMap.length > 0 ? buildSegmentFilterComplex(syncMap) : null;
+      const args: string[] = ["-i", "video.mp4", "-i", "audio.mp3"];
+      if (hasSubs) args.push("-i", "subtitles.srt");
+
+      if (segFilter) {
+        // filter_complex에서 outa 라벨이 1개면 label 이름이 마지막 [sN]
+        const outLabel = syncMap!.filter(s => s.dubEnd - s.dubStart >= 0.05).length === 1
+          ? `[s${syncMap!.findIndex(s => s.dubEnd - s.dubStart >= 0.05)}]`
+          : "[outa]";
+        args.push(
+          "-filter_complex", segFilter,
+          "-map", "0:v:0",
+          "-map", outLabel,
+          "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+          "-c:a", "aac",
+        );
+      } else {
+        args.push(
+          "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+          "-c:a", "aac",
+          "-af", buildAtempo(playbackRate),
+          "-map", "0:v:0",
+          "-map", "1:a:0",
+        );
+      }
+
+      if (hasSubs) {
+        const subsInputIdx = 2;
+        args.push(
+          "-map", `${subsInputIdx}:s:0`,
+          "-c:s", "mov_text",
+          `-metadata:s:s:0`, `language=${targetLanguage}`,
+        );
+      }
+
+      if (!segFilter) args.push("-shortest");
+      args.push("output.mp4");
+      await ffmpeg.exec(args);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data: any = await ffmpeg.readFile("output.mp4");
@@ -358,6 +590,83 @@ function MergeDownloadButton({
   );
 }
 
+// ─── 자막 컨트롤 바 ───────────────────────────────────────────────
+function SubtitleControls({
+  mode,
+  onChange,
+  subtitleCount,
+  subtitles,
+  targetLanguage,
+}: {
+  mode: SubtitleMode;
+  onChange: (m: SubtitleMode) => void;
+  subtitleCount: number;
+  subtitles: SubtitleCue[];
+  targetLanguage: string;
+}) {
+  const modes: { value: SubtitleMode; label: string }[] = [
+    { value: "off", label: "끄기" },
+    { value: "original", label: "원본" },
+    { value: "translated", label: LANGUAGE_LABELS[targetLanguage] || targetLanguage },
+    { value: "both", label: "원본+번역" },
+  ];
+
+  const downloadSRT = useCallback(
+    (type: "original" | "translated") => {
+      const content = toSRT(subtitles, type);
+      const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `subtitles_${type}.srt`;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+    [subtitles]
+  );
+
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      {/* 자막 모드 선택 */}
+      <div className="flex items-center gap-1.5">
+        <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">자막</span>
+        <div className="flex rounded-lg overflow-hidden border border-white/[0.08] bg-white/[0.03]">
+          {modes.map((m) => (
+            <button
+              key={m.value}
+              onClick={() => onChange(m.value)}
+              className={`px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                mode === m.value
+                  ? "bg-violet-600/40 text-violet-200"
+                  : "text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <span className="text-[10px] text-slate-600 font-mono">{subtitleCount}개</span>
+      </div>
+
+      {/* SRT 다운로드 */}
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={() => downloadSRT("original")}
+          className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors px-2 py-1 rounded border border-white/[0.06] hover:border-white/[0.12]"
+        >
+          원본 .srt
+        </button>
+        <button
+          onClick={() => downloadSRT("translated")}
+          className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors px-2 py-1 rounded border border-white/[0.06] hover:border-white/[0.12]"
+        >
+          번역 .srt
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── 메인 컴포넌트 ────────────────────────────────────────────────
 export default function AudioPlayer({
   audioUrl,
@@ -366,9 +675,14 @@ export default function AudioPlayer({
   translatedText,
   targetLanguage,
   originalVideoUrl,
+  subtitles,
+  syncMap,
 }: AudioPlayerProps) {
   const isVideo = !!originalVideoUrl;
   const [playbackRate, setPlaybackRate] = useState(1.0);
+  const [subtitleMode, setSubtitleMode] = useState<SubtitleMode>(
+    subtitles && subtitles.length > 0 ? "translated" : "off"
+  );
 
   return (
     <div className="space-y-4">
@@ -385,6 +699,17 @@ export default function AudioPlayer({
             <span className="text-sm font-semibold text-emerald-300">더빙 완료</span>
           </div>
 
+          {/* 자막 컨트롤 (자막이 있을 때만) */}
+          {subtitles && subtitles.length > 0 && (
+            <SubtitleControls
+              mode={subtitleMode}
+              onChange={setSubtitleMode}
+              subtitleCount={subtitles.length}
+              subtitles={subtitles}
+              targetLanguage={targetLanguage}
+            />
+          )}
+
           {/* 좌우 비디오 패널 */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <VideoPanel
@@ -393,6 +718,8 @@ export default function AudioPlayer({
               badgeColor="text-slate-300"
               videoUrl={originalVideoUrl}
               muted={false}
+              subtitleCues={subtitles}
+              subtitleMode={subtitleMode === "translated" ? "original" : subtitleMode}
             />
             <VideoPanel
               label="더빙 영상"
@@ -402,6 +729,9 @@ export default function AudioPlayer({
               audioUrl={audioUrl}
               muted={true}
               onRateChange={setPlaybackRate}
+              subtitleCues={subtitles}
+              subtitleMode={subtitleMode === "original" ? "off" : subtitleMode}
+              syncMap={syncMap}
             />
           </div>
 
@@ -412,6 +742,9 @@ export default function AudioPlayer({
               audioUrl={audioUrl}
               fileName={fileName}
               playbackRate={playbackRate}
+              subtitles={subtitles}
+              targetLanguage={targetLanguage}
+              syncMap={syncMap}
             />
             <a
               href={audioUrl}
@@ -437,16 +770,46 @@ export default function AudioPlayer({
             <h3 className="text-sm font-semibold text-emerald-300">더빙 결과</h3>
           </div>
           <audio controls className="w-full h-10" src={audioUrl} style={{ accentColor: "#7c3aed" }} />
-          <a
-            href={audioUrl}
-            download={fileName}
-            className="mt-3 inline-flex items-center gap-2 text-xs font-medium text-emerald-400 hover:text-emerald-200 transition-colors"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            MP3 다운로드
-          </a>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <a
+              href={audioUrl}
+              download={fileName}
+              className="inline-flex items-center gap-2 text-xs font-medium text-emerald-400 hover:text-emerald-200 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              MP3 다운로드
+            </a>
+            {subtitles && subtitles.length > 0 && (
+              <>
+                <button
+                  onClick={() => {
+                    const blob = new Blob([toSRT(subtitles, "original")], { type: "text/plain;charset=utf-8" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url; a.download = "subtitles_original.srt"; a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+                >
+                  원본 .srt
+                </button>
+                <button
+                  onClick={() => {
+                    const blob = new Blob([toSRT(subtitles, "translated")], { type: "text/plain;charset=utf-8" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url; a.download = "subtitles_translated.srt"; a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+                >
+                  번역 .srt
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
 
